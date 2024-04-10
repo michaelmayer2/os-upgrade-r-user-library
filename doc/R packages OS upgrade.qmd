@@ -1,0 +1,129 @@
+---
+title: "Reinstall R packages from User's home-directories following an OS upgrade"
+author: "Michael Mayer"
+format: pdf
+editor: visual
+---
+
+## Introduction
+
+If customers are upgrading the OS on their Posit Workbench servers, there is an open question what to do with the R packages that users have installed into their user library (as set by `R_LIBS_USER` , typically `~/R/...`)
+
+While there is some consensus that installing packages into a shared directory, especially then pointing to the "latest" CRAN repo is bad practice, those things still happen.
+
+An impending OS upgrade will already interrupt users in some way (outage), but more productivity is lost by simply removing R packages installed in `R_LIBS_USER` and leave it as an exercise to the users to reinstall their R packages (cf. [Posit's recommendations](https://docs.posit.co/how-to-guides/upgrade-os-and-product/phase2-migrate/#remove-user-libraries))
+
+This document describes an efficient way on how to reinstall R packages in `R_LIBS_USERS`.
+
+## Test approach
+
+#### Setup
+
+1.  Use 20 user accounts named `positXXXX` with XXXX being zero-padded 4-digits numbers ranging from 0001 to 0020
+
+2.  For each user, randomly select up to 20 of the top 3000 most downloaded packages from public package manager over the last year
+
+3.  Merge the package list into one and use this to install (as root) all the required OS dependencies.
+
+4.  For each user install the selected packages into `R_LIBS_USER` using R version 4.3.2, installed in `/opt/R/4.3.2`.
+
+#### Actual Upgrade
+
+1.  (ideally done pre-upgrade) For each user get a list of all installed packages from `R_LIBS_USER`.
+
+2.  Merge the package lists into a global list and install all OS dependencies
+
+3.  For each user, delete their `R_LIBS_USER` and reinstall all packages from the list obtained in step 1
+
+::: callout-note
+The above assumes that after the OS upgrade the same version of R is installed again and is readily configured with appropriate repositories (e.g. CRAN, Bioconductor or public/private Posit Package Manager).
+:::
+
+## Test Setup Details
+
+1.  Setup 20 user accounts named `positXXXX` with XXXX being zero-padded 4-digits numbers ranging from 0001 to 0020
+
+2.  Clone [github repo](https://github.com/michaelmayer2/os-upgrade-r-user-library) into the home-directory of `posit0001`
+
+3.  Symlink the `upgrade` subfolder to `/home/posit0001/upgrade`.
+
+4.  Randomly select up to 20 of the top 3000 most downloaded packages from public package manager over the last year. This will create a file named `pkgs-selected-4.3.txt` in each user's home-directory.
+
+    ``` bash
+    for i in `seq 1 20`
+    do 
+      user="posit`printf %04i $i`"
+      echo $user
+      mkhomedir_helper $user
+      sudo -u $user bash -l -c "cd && rm -rf ~/R ~/.cache/R/pkgcache && /opt/R/4.3.2/bin/Rscript /home/posit0001/upgrade/select-package.R"
+    done
+    ```
+
+5.  Merge all individual selected package lists into one and install OS dependencies
+
+    ``` bash
+    cat /home/posit00*/pkgs-selected-4.3.txt  | sort -u  > /home/posit0001/pkgs-selected-combined.txt
+
+    /opt/R/4.3.2/bin/Rscript /home/posit0001/upgrade/install-os-deps.R
+    ```
+
+6.  Install selected R packages for each user including package dependencies
+
+    ``` bash
+    for i in `seq 1 20`
+    do 
+      user="posit`printf %04i $i`"
+      echo $user
+      sudo -u $user bash -l -c "cd && /opt/R/4.3.2/bin/Rscript /home/posit0001/upgrade/install-packages.R"
+    done
+
+    rm -f /home/posit00??/pkgs-selected-*.txt
+    ```
+
+::: callout-important
+All commands in this and the next section need to be run as root user with working directory set to `/home/posit0001`.
+:::
+
+## OS upgrade procedure
+
+### Before upgrade
+
+Let's create a package list of installed packages for each of the users. The below script will create a file called `pkgs-4.3.txt` in each user's home-directory.
+
+``` bash
+for i in `seq 1 20`
+do 
+  user="posit`printf %04i $i`"
+  echo $user 
+  sudo -u $user bash -l -c "cd && /opt/R/4.3.2/bin/Rscript /home/posit0001/upgrade/get-packge-list.R"
+done
+```
+
+Then let's create a combined package list of all packages the users have installed and use this to install all OS dependencies.
+
+``` bash
+cat /home/posit00*/pkgs-4.3.txt  | sort -u  > /home/posit0001/pkgs-selected-combined.txt
+
+/opt/R/4.3.2/bin/Rscript /home/posit0001/upgrade/install-os-deps.R
+```
+
+::: callout-note
+At this step there is a risk that an error will occur due to OS dependency resolution issues. Usually those errors are fairly self-explanatory and should be helpful to find a fix. If not, please report any issue to <https://github.com/r-lib/pak>
+:::
+
+### After the upgrade
+
+Let's remove the old `R_LIBS_USER` and install the packages from the list of packages created.
+
+``` bash
+for i in `seq 1 20`
+do 
+  user="posit`printf %04i $i`"
+  echo $user 
+  sudo -u $user bash -l -c "cd && /opt/R/4.3.2/bin/Rscript /home/posit0001/upgrade/reinstall-packages.R"
+done
+```
+
+::: callout-note
+The last step also could be done by each user individually at their own leisure.
+:::
